@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 
 state.json
+neo4j_data
