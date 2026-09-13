@@ -19,3 +19,41 @@ class MongoDB:
             return len(self.db[MONGO_WIKIS_TABLE].insert_many(wikis, ordered=False).inserted_ids)
         except errors.BulkWriteError as bwe:
             return bwe.details.get("nInserted", 0)
+
+    def getWikisCount(self):
+        return self.db[MONGO_WIKIS_TABLE].estimated_document_count()
+
+    def getWikiBatches(self, batch_size=500):
+        collection = self.db[MONGO_WIKIS_TABLE]
+
+        cursor = collection.find(
+            {},
+            projection={"_id": 0, "title": 1, "linkedPages": 1},
+            no_cursor_timeout=True
+        )
+
+        batch = []
+        try:
+            for doc in cursor:
+                title = doc.get("title")
+                links = [(l[:1].upper() + l[1:]) for l in doc.get("linkedPages", [])]
+
+                # Skip invalid or linkless entries
+                if not title or not links:
+                    continue
+
+                batch.append({
+                    "title": title,
+                    "links": links,
+                    "out_degree": len(links)
+                })
+
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+
+            if batch:
+                yield batch
+
+        finally:
+            cursor.close()
