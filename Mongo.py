@@ -4,7 +4,7 @@ MONGO_WIKIS_TABLE = "wikis"
 
 class MongoDB:
     def __init__(self, db: str, host="localhost", port=27017):
-        self.client = MongoClient(f"mongodb://{host}:{str(port)}/")
+        self.client = MongoClient(f"mongodb://crawler:testpass@{host}:{str(port)}/")
         self.db = self.client[db]
         self._setup()
 

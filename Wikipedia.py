@@ -25,10 +25,10 @@ class Wikipedia:
     def _retry(f, timeout=1.0, repeat=1):
         if repeat == 0:
             raise Exception("Retry attempts exceeded!")
-        time.sleep(timeout)
         try:
             return f()
         except:
+            time.sleep(timeout)
             Wikipedia._retry(f, timeout, repeat-1)
 
     def getWiki(self, **kwargs):
