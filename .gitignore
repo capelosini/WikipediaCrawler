@@ -221,3 +221,4 @@ __marimo__/
 
 *.json
 neo4j_data
+*.bin
