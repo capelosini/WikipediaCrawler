@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wikipedia Graph Visualizer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="graphCanvas"></canvas>
+
+  <div id="uiOverlay">
+    <div id="statsPanel">
+      <h2>Wikipedia Graph Engine</h2>
+      <p>Nodes: <span id="nodeCount">0</span></p>
+      <p>Edges: <span id="edgeCount">0</span></p>
+      <p>Status: <span id="status">Loading binary files...</span></p>
+    </div>
+    <div id="tooltip" class="hidden"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

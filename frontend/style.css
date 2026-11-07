@@ -1,0 +1,76 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0b0e14;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+}
+
+#graphCanvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+#uiOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#statsPanel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 16px;
+  border-radius: 8px;
+  color: #f1f5f9;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+#statsPanel h2 {
+  font-size: 1.1rem;
+  margin-bottom: 8px;
+  color: #38bdf8;
+}
+
+#statsPanel p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+
+#statsPanel span {
+  color: #f1f5f9;
+  font-weight: 600;
+}
+
+#tooltip {
+  position: absolute;
+  background: rgba(30, 41, 59, 0.95);
+  color: #f8fafc;
+  border: 1px solid #38bdf8;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+#tooltip.hidden {
+  opacity: 0;
+}
