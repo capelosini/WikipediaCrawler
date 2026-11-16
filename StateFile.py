@@ -13,7 +13,7 @@ class StateFile:
     def __init__(self, filename: str = "state.json"):
         self.filename = filename
         # defaults
-        self.state = STATE_FILE_DEFAULT
+        self.state = dict(STATE_FILE_DEFAULT)
         if os.path.exists(filename):
             with open(filename, "r+") as f:
                 data = f.read()
@@ -27,9 +27,12 @@ class StateFile:
 
     def save(self):
         self.state['savedAt'] = int(datetime.now().timestamp())
-        f = open(self.filename, "w+")
-        f.write(json.dumps(self.state))
-        f.close()
+        tmpFile = f"{self.filename}.tmp"
+        with open(tmpFile, "w+") as f:
+            f.write(json.dumps(self.state))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmpFile, self.filename)
 
     def _getField(self, field: str):
         return self.state.get(field, STATE_FILE_DEFAULT.get(field))
