@@ -1,5 +1,25 @@
 # Wikipedia Crawler
 
+### Layout do grafo (Louvain + force-directed)
+```
+python3 layout.py   # 1a vez: Louvain (~7 min, ~6 GB RAM) -> comm_levels.npy
+python3 layout.py   # 2a vez: comunidades + refinamento (~3 min) -> frontend/nodes.bin
+```
+Regrava `x/y`, grau e comunidade em `frontend/nodes.bin` (backup em `nodes.orig.bin`)
+e gera `frontend/layout_preview.png`. Requer `python-igraph`, `numpy`, `scipy`, `matplotlib`.
+
+### Frontend (visualizador do grafo)
+Os `.bin` (gerados por `neo4jData2Bin.py`) podem ficar na raiz ou em `frontend/`.
+```
+cd frontend
+python3 -m http.server 8000
+```
+Abra http://localhost:8000/ (não abra via `file://`).
+
+- Hover: título, grau e comunidade.
+- Clique: seleciona o nó e destaca vizinhos e arestas.
+- Painel "Comunidades": filtra pelas 20 maiores.
+- Renderização WebGL2 (3,58M nós / 30M arestas); `pyvis`/`Dash` não suportam essa escala.
 
 ### Test docker container for MongoDB
 ```

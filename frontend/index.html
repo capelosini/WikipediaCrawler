@@ -1,21 +1,104 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wikipedia Graph Visualizer</title>
+  <title>Wikipedia Graph Explorer</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <canvas id="graphCanvas"></canvas>
+  <canvas id="labelCanvas"></canvas>
 
   <div id="uiOverlay">
-    <div id="statsPanel">
-      <h2>Wikipedia Graph Engine</h2>
-      <p>Nodes: <span id="nodeCount">0</span></p>
-      <p>Edges: <span id="edgeCount">0</span></p>
-      <p>Status: <span id="status">Loading binary files...</span></p>
-    </div>
+    <!-- Barra Superior: Busca e Ações -->
+    <header id="topBar">
+      <div id="searchContainer">
+        <input id="searchInput" type="text" placeholder="🔍 Buscar artigo (ex: Brasil, Física, História)..." autocomplete="off">
+        <div id="searchResults" class="hidden"></div>
+      </div>
+      <div id="quickActions">
+        <button id="btnRandom" title="Saltar para artigo aleatório">🎲 Aleatório</button>
+        <button id="btnReset" title="Centralizar e ajustar vista">⟲ Ajustar Vista</button>
+      </div>
+    </header>
+
+    <!-- Barra Lateral Esquerda -->
+    <aside id="leftSidebar">
+      <!-- Painel de Estatísticas -->
+      <section id="statsPanel" class="card">
+        <h2>Wikipedia Graph Engine</h2>
+        <div class="statsGrid">
+          <div><label>Nós</label><span id="nodeCount">0</span></div>
+          <div><label>Arestas</label><span id="edgeCount">0</span></div>
+          <div><label>Comunidades</label><span id="commCount">0</span></div>
+        </div>
+        <p id="status">Carregando binários...</p>
+        <p class="hint">Arraste · scroll zoom · duplo clique aproxima · <kbd>/</kbd> busca · <kbd>Esc</kbd> limpa</p>
+      </section>
+
+      <!-- Painel de Controles de Visualização -->
+      <section id="controlsPanel" class="card">
+        <h3>Ajustes de Visualização</h3>
+        <div class="controlRow">
+          <label>Espalhamento: <b id="valSpread">1.0x</b></label>
+          <input id="sliderSpread" type="range" min="1" max="4" value="1" step="0.1">
+        </div>
+        <div class="controlRow">
+          <label>Gravidade interna: <b id="valGrav">0%</b></label>
+          <input id="sliderGrav" type="range" min="0" max="0.85" value="0" step="0.05">
+        </div>
+        <div class="controlRow">
+          <label>Densidade de nós: <b id="valDens">5%</b></label>
+          <input id="sliderDens" type="range" min="0.01" max="1" value="0.05" step="0.01">
+        </div>
+        <div class="controlRow">
+          <label>Grau Mínimo: <b id="valDeg">0</b></label>
+          <input id="sliderDeg" type="range" min="0" max="30" value="0" step="1">
+        </div>
+        <div class="controlRow">
+          <label>Tamanho Nós: <b id="valSize">1.0x</b></label>
+          <input id="sliderSize" type="range" min="0.4" max="2.5" value="1.0" step="0.1">
+        </div>
+        <div class="controlRow">
+          <label>Opacidade Arestas: <b id="valEdge">0.030</b></label>
+          <input id="sliderEdge" type="range" min="0.005" max="0.08" value="0.03" step="0.005">
+        </div>
+        <div class="controlRow checks">
+          <label><input id="chkEdges" type="checkbox" checked> Arestas</label>
+          <label><input id="chkLabels" type="checkbox" checked> Rótulos</label>
+        </div>
+      </section>
+
+      <!-- Painel de Comunidades -->
+      <section id="commPanel" class="card">
+        <div class="cardHeader">
+          <h3>Comunidades</h3>
+          <button id="clearFilter">Todas</button>
+        </div>
+        <div id="commList"></div>
+      </section>
+    </aside>
+
+    <!-- Painel de Detalhes do Nó -->
+    <section id="infoPanel" class="card hidden">
+      <div class="cardHeader">
+        <h3 id="infoTitle"></h3>
+        <button id="clearSel" title="Fechar">✕</button>
+      </div>
+      <div class="infoBadges">
+        <span class="badge" id="infoDeg"></span>
+        <span class="badge" id="infoComm"></span>
+      </div>
+      <p class="hint"><span style="color:#fbbf24">●</span> links que saem · <span style="color:#38bdf8">●</span> links que entram</p>
+      <a id="wikiLink" href="#" target="_blank" rel="noopener">Abrir artigo na Wikipédia ↗</a>
+      <div id="neighborsSection">
+        <h4>Conexões diretas (<span id="infoNeighbors"></span>):</h4>
+        <div id="neighborsList"></div>
+      </div>
+    </section>
+
+    <!-- Tooltip Flutuante -->
     <div id="tooltip" class="hidden"></div>
   </div>
 

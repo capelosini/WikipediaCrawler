@@ -222,3 +222,6 @@ __marimo__/
 *.json
 neo4j_data
 *.bin
+
+*.npy
+layout_preview.png
