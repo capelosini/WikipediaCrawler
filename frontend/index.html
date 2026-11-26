@@ -19,6 +19,7 @@
       </div>
       <div id="quickActions">
         <button id="btnRandom" title="Saltar para artigo aleatório">🎲 Aleatório</button>
+        <button id="btnPath" title="Menor caminho entre dois artigos">🧭 Caminho</button>
         <button id="btnReset" title="Centralizar e ajustar vista">⟲ Ajustar Vista</button>
       </div>
     </header>
@@ -52,6 +53,10 @@
           <label>Densidade de nós: <b id="valDens">5%</b></label>
           <input id="sliderDens" type="range" min="0.01" max="1" value="0.05" step="0.01">
         </div>
+        <div class="controlRow" title="Desenha só os N artigos de maior grau (e as arestas entre eles). Menor = mais leve.">
+          <label>Máx. nós (top N por grau): <b id="valTopN">200.000</b></label>
+          <input id="sliderTopN" type="range" min="0" max="1000" value="650" step="1">
+        </div>
         <div class="controlRow">
           <label>Grau Mínimo: <b id="valDeg">0</b></label>
           <input id="sliderDeg" type="range" min="0" max="30" value="0" step="1">
@@ -80,28 +85,88 @@
       </section>
     </aside>
 
-    <!-- Painel de Detalhes do Nó -->
-    <section id="infoPanel" class="card hidden">
-      <div class="cardHeader">
-        <h3 id="infoTitle"></h3>
-        <button id="clearSel" title="Fechar">✕</button>
-      </div>
-      <div class="infoBadges">
-        <span class="badge" id="infoDeg"></span>
-        <span class="badge" id="infoComm"></span>
-      </div>
-      <p class="hint"><span style="color:#fbbf24">●</span> links que saem · <span style="color:#38bdf8">●</span> links que entram</p>
-      <a id="wikiLink" href="#" target="_blank" rel="noopener">Abrir artigo na Wikipédia ↗</a>
-      <div id="neighborsSection">
-        <h4>Conexões diretas (<span id="infoNeighbors"></span>):</h4>
-        <div id="neighborsList"></div>
-      </div>
-    </section>
+    <!-- Barra Lateral Direita -->
+    <aside id="rightSidebar">
+      <!-- Menor caminho entre dois artigos -->
+      <section id="pathPanel" class="card hidden">
+        <div class="cardHeader">
+          <h3>Menor caminho</h3>
+          <button id="closePath" title="Fechar">✕</button>
+        </div>
+        <label class="fieldLabel">Origem</label>
+        <input id="pathFrom" class="textField" type="text" placeholder="Artigo de origem" autocomplete="off">
+        <div id="pathFromResults" class="inlineResults hidden"></div>
+        <label class="fieldLabel">Destino</label>
+        <input id="pathTo" class="textField" type="text" placeholder="Artigo de destino" autocomplete="off">
+        <div id="pathToResults" class="inlineResults hidden"></div>
+        <div class="controlRow">
+          <label class="fieldLabel">Sentido dos links</label>
+          <select id="pathDir" class="textField">
+            <option value="dir">Seguir os links (origem → destino)</option>
+            <option value="und">Ignorar o sentido</option>
+          </select>
+        </div>
+        <label class="checkLine" title="Esconde o resto do grafo enquanto o caminho está na tela (bem mais leve com zoom afastado)">
+          <input id="chkPathOnly" type="checkbox" checked> Mostrar só o caminho
+        </label>
+        <div class="rowButtons">
+          <button id="pathGo">Buscar caminho</button>
+          <button id="pathSwap" title="Trocar origem e destino">⇄</button>
+          <button id="pathClear">Limpar</button>
+        </div>
+        <div id="pathResult"></div>
+      </section>
+
+      <!-- Painel de Detalhes do Nó -->
+      <section id="infoPanel" class="card hidden">
+        <div class="cardHeader">
+          <h3 id="infoTitle"></h3>
+          <button id="clearSel" title="Fechar">✕</button>
+        </div>
+        <div class="infoBadges">
+          <span class="badge" id="infoDeg"></span>
+          <span class="badge" id="infoComm"></span>
+        </div>
+        <a id="wikiLink" href="#" target="_blank" rel="noopener">Abrir artigo na Wikipédia ↗</a>
+        <div class="rowButtons">
+          <button id="setFrom">Usar como origem</button>
+          <button id="setTo">Usar como destino</button>
+        </div>
+
+        <div id="hoodControls">
+          <h4>Vizinhança</h4>
+          <div class="controlRow">
+            <label>Profundidade: <b id="valDepth">1</b></label>
+            <input id="sliderDepth" type="range" min="1" max="5" value="1" step="1">
+          </div>
+          <div class="controlRow">
+            <label>Links a seguir</label>
+            <select id="hoodDir" class="textField">
+              <option value="both">Que saem e que entram</option>
+              <option value="out">Só os que saem</option>
+              <option value="in">Só os que entram</option>
+            </select>
+          </div>
+          <div class="controlRow">
+            <label>Máx. nós desenhados: <b id="valMaxShown">2000</b></label>
+            <input id="sliderMaxShown" type="range" min="100" max="20000" value="2000" step="100">
+          </div>
+          <div id="levelList"></div>
+          <button id="fitHood">Enquadrar vizinhança</button>
+        </div>
+
+        <div id="neighborsSection">
+          <h4>Conexões diretas (<span id="infoNeighbors"></span>):</h4>
+          <div id="neighborsList"></div>
+        </div>
+      </section>
+    </aside>
 
     <!-- Tooltip Flutuante -->
     <div id="tooltip" class="hidden"></div>
   </div>
 
+  <script src="graph.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

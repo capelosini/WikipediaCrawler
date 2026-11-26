@@ -69,8 +69,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // mode 0: linha | 1: vizinho | 2: anel do alvo
   const hlProg = program(`
-    layout(location=0) in vec2 a_pos; uniform float u_size;
-    void main() { gl_Position = project(a_pos); gl_PointSize = u_size; }`, `
+    layout(location=0) in vec2 a_pos; uniform float u_size; uniform vec2 u_off;
+    void main() {
+      gl_Position = project(a_pos);
+      gl_Position.xy += vec2(u_off.x, -u_off.y) / u_res * 2.0;
+      gl_PointSize = u_size;
+    }`, `
     uniform vec4 u_color; uniform float u_mode; out vec4 o;
     void main() {
       if (u_mode < 0.5) { o = u_color; return; }
@@ -95,7 +99,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- Estado ---
   let minDeg = 0, nodeSize = 1, edgeAlpha = 0.03, density = 0.05;
   let filterComm = -1, sel = -1, hov = -1, showEdges = true, showLabels = true;
-  let selTitle = '', hlOut = 0, hlIn = 0, hlNeighbors = 0;
+  let selTitle = '';
+  // Destaque atual (vizinhança ou caminho): { layers, centers, labels } -> ver uploadHL()
+  let hoodHL = null, pathHL = null, pathOnly = true;
+  // Com um caminho na tela e "Mostrar só o caminho" marcado, o grafo de fundo (3,5M nós,
+  // ~1,9M arestas) não é desenhado: só o caminho, que tem poucos nós.
+  const focusPath = () => pathOnly && pathHL !== null;
+  let hl = null, hlRanges = null, hoodDepth = 1, hoodDir = 'both', maxShown = 2000;
 
   // --- Câmera ---
   const cam = { zoom: 1, panX: 0, panY: 0 };
@@ -168,7 +178,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     lookup[dv.getUint32(o, true) - minId] = i;
     pos[i * 2] = dv.getFloat32(o + 4, true);
     pos[i * 2 + 1] = dv.getFloat32(o + 8, true);
-    deg[i] = dv.getUint32(o + 12, true);
     comm[i] = dv.getUint32(o + 16, true);
     titleOff[i] = dv.getUint32(o + 20, true);
     titleLen[i] = dv.getUint16(o + 24, true);
@@ -176,6 +185,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   C++;
   pos0.set(pos);
+
+  // Grau = links que saem + links que entram, contado a partir de edges.bin
+  // (o campo de grau em nodes.bin vem zerado do export do Neo4j).
+  let eb = await fetchBuffer('edges.bin', 'edges.bin');
+  let edgeU32 = new Uint32Array(eb);
+  const E = eb.byteLength / 8;
+  statusEl.innerText = 'Calculando graus...';
+  await new Promise(r => setTimeout(r));
+  {
+    const L = lookup.length;
+    for (let k = 0; k < E * 2; k++) {
+      const id = edgeU32[k] - minId;
+      if (id >= 0 && id < L) deg[lookup[id]]++;
+    }
+  }
 
   const strings = new Uint8Array(await fetchBuffer('strings.bin', 'strings.bin'));
   const decoder = new TextDecoder();
@@ -224,6 +248,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     return Math.max(minDeg, f >= 1 ? 0 : sorted[Math.floor((1 - f) * N)]);
   };
 
+  // Top N: na GPU os nós ficam ordenados por grau decrescente (byDeg), então limitar a N nós
+  // é desenhar só os N primeiros vértices; o resto nem passa pelo shader.
+  const byDeg = new Int32Array(N), rankOf = new Uint32Array(N);
+  {
+    const SHn = 2 ** Math.ceil(Math.log2(N + 1)), keys = new Float64Array(N);
+    for (let i = 0; i < N; i++) keys[i] = deg[i] * SHn + i;
+    keys.sort();
+    for (let k = 0; k < N; k++) { const i = keys[N - 1 - k] % SHn; byDeg[k] = i; rankOf[i] = k; }
+  }
+  // primeiro índice com arr[idx] >= v (arr crescente)
+  const lowerBound = (arr, v) => {
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  let topN = Math.min(N, 200000);
+  // quantos nós desenhar: o menor entre top N e os que passam no grau mínimo / densidade por zoom
+  const drawCount = () => Math.min(topN, N - lowerBound(sorted, curMin()));
+
   // Grid espacial para hover/clique
   const GS = 128;
   const gridHead = new Int32Array(GS * GS).fill(-1), gridNext = new Int32Array(N);
@@ -239,9 +282,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   buildGrid();
 
   // Arestas (amostradas, cor degradê entre as comunidades das pontas)
-  const eb = await fetchBuffer('edges.bin', 'edges.bin');
-  const edgeU32 = new Uint32Array(eb);
-  const E = eb.byteLength / 8;
   const step = Math.max(1, Math.ceil(E / 2000000));
   const M = Math.ceil(E / step);
   const es = new Uint32Array(M), et = new Uint32Array(M);
@@ -249,8 +289,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   const em = new Float32Array(M * 4), ed = new Float32Array(M * 2);
   let w = 0;
   for (let e = 0; e < E; e += step, w++) {
-    const s = lookup[edgeU32[e * 2] - minId], t = lookup[edgeU32[e * 2 + 1] - minId];
-    es[w] = s; et[w] = t;
+    es[w] = lookup[edgeU32[e * 2] - minId];
+    et[w] = lookup[edgeU32[e * 2 + 1] - minId];
+  }
+  // Ordena as arestas pelo maior rank das pontas: as arestas entre nós do top N formam um prefixo.
+  const edgeKey = new Uint32Array(w);
+  {
+    const SHm = 2 ** Math.ceil(Math.log2(w + 1)), keys = new Float64Array(w);
+    for (let k = 0; k < w; k++) keys[k] = Math.max(rankOf[es[k]], rankOf[et[k]]) * SHm + k;
+    keys.sort();
+    const s0 = es.slice(0, w), t0 = et.slice(0, w);
+    for (let k = 0; k < w; k++) {
+      const j = keys[k] % SHm;
+      es[k] = s0[j]; et[k] = t0[j];
+      edgeKey[k] = (keys[k] - j) / SHm;
+    }
+  }
+  for (w = 0; w < edgeKey.length; w++) {
+    const s = es[w], t = et[w];
     ev[w * 4] = pos[s * 2]; ev[w * 4 + 1] = pos[s * 2 + 1];
     ev[w * 4 + 2] = pos[t * 2]; ev[w * 4 + 3] = pos[t * 2 + 1];
     ec.set(colors.subarray(s * 3, s * 3 + 3), w * 6);
@@ -261,9 +317,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   const edgeVerts = w * 2;
 
+  // Índice de adjacência (CSR) para vizinhança por profundidade e menor caminho.
+  // Depois dele as arestas cruas não são mais necessárias (libera ~240 MB).
+  statusEl.innerText = 'Indexando arestas...';
+  await new Promise(r => setTimeout(r));
+  const g = GraphAlgos.buildCSR(edgeU32, E, N, lookup, minId);
+  edgeU32 = null; eb = null;
+
   // --- Buffers GPU ---
   const nodeVao = vao();
-  const posBuf = buf(0, pos, 2, gl.FLOAT, false, gl.DYNAMIC_DRAW); buf(1, colors, 3, gl.UNSIGNED_BYTE, true); buf(2, deg, 1); buf(3, new Float32Array(comm), 1);
+  const byRank = (src, k) => {
+    const o = new src.constructor(N * k);
+    for (let r = 0; r < N; r++) for (let j = 0; j < k; j++) o[r * k + j] = src[byDeg[r] * k + j];
+    return o;
+  };
+  const posBuf = buf(0, byRank(pos, 2), 2, gl.FLOAT, false, gl.DYNAMIC_DRAW); buf(1, byRank(colors, 3), 3, gl.UNSIGNED_BYTE, true);
+  buf(2, byRank(deg, 1), 1); buf(3, byRank(new Float32Array(comm), 1), 1);
   const edgeVao = vao();
   const edgeBuf = buf(0, ev, 2, gl.FLOAT, false, gl.DYNAMIC_DRAW); buf(1, ec, 3, gl.UNSIGNED_BYTE, true); buf(2, em, 2); buf(3, ed, 1);
   const hlPtVao = vao(), hlPtBuf = buf(0, new Float32Array(2), 2, gl.FLOAT, false, gl.DYNAMIC_DRAW);
@@ -274,7 +343,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('nodeCount').innerText = N.toLocaleString();
   $('edgeCount').innerText = E.toLocaleString();
   $('commCount').innerText = C.toLocaleString();
-  const setStatus = () => statusEl.innerText = sel >= 0 ? 'Selecionado: ' + selTitle
+  const setStatus = () => statusEl.innerText = pathHL ? pathHL.status : sel >= 0 ? 'Selecionado: ' + selTitle
     : filterComm >= 0 ? 'Comunidade: ' + commTitle(filterComm) : (edgeVerts / 2).toLocaleString() + ' arestas amostradas';
   setStatus();
 
@@ -288,52 +357,67 @@ document.addEventListener('DOMContentLoaded', async () => {
   };
 
   function render() {
-    const md = curMin(), dim = sel >= 0 ? 1 : 0, ps = Math.min(3.5, Math.sqrt(cam.zoom)) * dpr;
+    const md = curMin(), dc = drawCount(), dim = hl ? 1 : 0, ps = Math.min(3.5, Math.sqrt(cam.zoom)) * dpr;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.024, 0.035, 0.067, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
-    if (showEdges) {
+    if (showEdges && !focusPath()) {
       use(edgeProg, edgeVao);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       u(edgeProg, 'u_filter', filterComm);
       u(edgeProg, 'u_minDeg', md);
       u(edgeProg, 'u_alpha', dim ? 0.006 : edgeAlpha);
-      gl.drawArrays(gl.LINES, 0, edgeVerts);
+      gl.drawArrays(gl.LINES, 0, lowerBound(edgeKey, dc) * 2);
     }
 
-    use(nodeProg, nodeVao);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    u(nodeProg, 'u_pscale', ps);
-    u(nodeProg, 'u_filter', filterComm);
-    u(nodeProg, 'u_minDeg', md);
-    u(nodeProg, 'u_nodeSize', nodeSize);
-    u(nodeProg, 'u_dim', dim);
-    gl.drawArrays(gl.POINTS, 0, N);
+    if (!focusPath()) {
+      use(nodeProg, nodeVao);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      u(nodeProg, 'u_pscale', ps);
+      u(nodeProg, 'u_filter', filterComm);
+      u(nodeProg, 'u_minDeg', md);
+      u(nodeProg, 'u_nodeSize', nodeSize);
+      u(nodeProg, 'u_dim', dim);
+      gl.drawArrays(gl.POINTS, 0, dc);
+    }
 
-    if (sel >= 0) {
+    if (hl && hlRanges) {
+      const th = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
       use(hlProg, hlLnVao);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       u(hlProg, 'u_mode', 0);
-      u(hlProg, 'u_color', 0.98, 0.75, 0.25, 0.8);
-      gl.drawArrays(gl.LINES, 0, hlOut);
-      u(hlProg, 'u_color', 0.22, 0.74, 0.97, 0.8);
-      gl.drawArrays(gl.LINES, hlOut, hlIn);
+      hl.layers.forEach((L, k) => {
+        const R = hlRanges[k];
+        if (!R.lineCount) return;
+        u(hlProg, 'u_color', ...L.color);
+        for (const [ox, oy] of L.thick ? th : th.slice(0, 1)) {
+          u(hlProg, 'u_off', ox * dpr * 0.7, oy * dpr * 0.7);
+          gl.drawArrays(gl.LINES, R.lineStart, R.lineCount);
+        }
+      });
+      u(hlProg, 'u_off', 0, 0);
 
       use(hlProg, hlPtVao);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      u(hlProg, 'u_off', 0, 0);
       u(hlProg, 'u_mode', 1);
-      u(hlProg, 'u_size', (nodeSize * 4.5 + 4) * ps);
-      u(hlProg, 'u_color', 0.98, 0.75, 0.25, 0.9);
-      if (hlNeighbors) gl.drawArrays(gl.POINTS, 1, hlNeighbors);
+      hl.layers.forEach((L, k) => {
+        const R = hlRanges[k];
+        if (!R.ptCount) return;
+        u(hlProg, 'u_size', (nodeSize * 4.5 + 4) * L.size * ps);
+        u(hlProg, 'u_color', L.color[0], L.color[1], L.color[2], 0.9);
+        gl.drawArrays(gl.POINTS, R.ptStart, R.ptCount);
+      });
       u(hlProg, 'u_mode', 2);
       u(hlProg, 'u_size', (nodeSize * 6 + 16) * ps);
       u(hlProg, 'u_color', 1, 1, 1, 1);
-      gl.drawArrays(gl.POINTS, 0, 1);
+      gl.drawArrays(gl.POINTS, 0, hl.centers.length);
     }
 
     if (hov >= 0 && hov !== sel) {
       use(hlProg, hovVao);
+      u(hlProg, 'u_off', 0, 0);
       u(hlProg, 'u_mode', 2);
       u(hlProg, 'u_size', 20 * dpr * Math.min(2, Math.sqrt(cam.zoom)));
       u(hlProg, 'u_color', 1, 1, 1, 0.85);
@@ -364,17 +448,22 @@ document.addEventListener('DOMContentLoaded', async () => {
       ctx.fillText(t, x, y);
     };
 
-    if (sel >= 0) put(selTitle, pos[sel * 2], pos[sel * 2 + 1] - 16 * dpr / s, 14, '#fff', 1, true);
+    if (hl) {
+      hl.centers.forEach((i, k) => put(hl.centerTitles[k], pos[i * 2], pos[i * 2 + 1] - 16 * dpr / s, 14, '#fff', 1, true));
+      hl.labels.forEach(([i, t]) => put(t, pos[i * 2], pos[i * 2 + 1] - 12 * dpr / s, 12, '#fde68a', 1));
+    }
+
+    if (focusPath()) { ctx.globalAlpha = 1; return; }
 
     const ca = Math.max(0, Math.min(1, (3.2 - cam.zoom) / 2));
     if (ca > 0 && filterComm < 0)
       for (const c of top) put(commTitle(c), cxs[c] / counts[c], cys[c] / counts[c], 15, rgb(c), ca, true);
 
-    const md = curMin();
+    const md = curMin(), dc = drawCount();
     const n = cam.zoom < 1.5 ? 0 : Math.min(hubs.length, Math.floor(8 * cam.zoom * cam.zoom));
     for (let k = 0; k < n; k++) {
       const i = hubs[k];
-      if ((filterComm >= 0 && comm[i] !== filterComm) || deg[i] < md) continue;
+      if ((filterComm >= 0 && comm[i] !== filterComm) || deg[i] < md || rankOf[i] >= dc) continue;
       put(hubTitles[k], pos[i * 2], pos[i * 2 + 1], 12, '#e2e8f0', 0.9);
     }
     ctx.globalAlpha = 1;
@@ -398,12 +487,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   // --- Hover / clique ---
   function nearest(mx, my) {
     const s = scale(), wx = (mx - transX()) / s, wy = (my - transY()) / s;
-    const r = Math.max(10, 14 * nodeSize) * dpr / s, md = curMin();
+    const r = Math.max(10, 14 * nodeSize) * dpr / s, md = curMin(), dc = drawCount();
     let best = r * r, hit = -1;
+    if (focusPath()) {
+      for (const i of pathHL.fit) {
+        const dx = pos[i * 2] - wx, dy = pos[i * 2 + 1] - wy, d = dx * dx + dy * dy;
+        if (d < best) { best = d; hit = i; }
+      }
+      return hit;
+    }
     for (let gy = gcell(wy - r); gy <= gcell(wy + r); gy++)
       for (let gx = gcell(wx - r); gx <= gcell(wx + r); gx++)
         for (let i = gridHead[gy * GS + gx]; i !== -1; i = gridNext[i]) {
-          if ((filterComm >= 0 && comm[i] !== filterComm) || deg[i] < md) continue;
+          if ((filterComm >= 0 && comm[i] !== filterComm) || deg[i] < md || rankOf[i] >= dc) continue;
           const dx = pos[i * 2] - wx, dy = pos[i * 2 + 1] - wy, d = dx * dx + dy * dy;
           if (d < best) { best = d; hit = i; }
         }
@@ -432,102 +528,307 @@ document.addEventListener('DOMContentLoaded', async () => {
   canvas.onclick = e => {
     if (moved) return;
     const h = nearest(e.clientX * dpr, e.clientY * dpr);
+    // só o caminho na tela: clique centraliza no nó sem desfazer o caminho
+    if (focusPath()) { if (h >= 0) flyTo(pos[h * 2], pos[h * 2 + 1], 12); return; }
     h < 0 ? clearSelection() : selectNode(h);
   };
 
-  function clearSelection() {
-    sel = -1;
-    hlNeighbors = 0;
-    infoPanel.classList.add('hidden');
+  // --- Destaques (vizinhança / caminho) ---
+  // hl = { layers: [{ color: [r,g,b,a], size, thick, pairs: [a,b,...], pts: [i,...] }],
+  //        centers: [i], centerTitles: [], labels: [[i, titulo]], fit: [i], status }
+  const LEVEL_COLORS = [[0.98, 0.75, 0.25], [0.30, 0.85, 0.50], [0.22, 0.74, 0.97], [0.65, 0.55, 0.98], [0.96, 0.45, 0.70]];
+  const PATH_COLOR = [0.96, 0.45, 0.71, 0.95];
+  const cssColor = c => `rgb(${c.slice(0, 3).map(v => Math.round(v * 255))})`;
+
+  function uploadHL() {
+    if (!hl) { hlRanges = null; return; }
+    let nPairs = 0, nPts = hl.centers.length;
+    for (const L of hl.layers) { nPairs += L.pairs.length / 2; nPts += L.pts.length; }
+    const lines = new Float32Array(nPairs * 4), pts = new Float32Array(nPts * 2);
+    let lw = 0, pw = 0;
+    for (const i of hl.centers) { pts[pw++] = pos[i * 2]; pts[pw++] = pos[i * 2 + 1]; }
+    hlRanges = hl.layers.map(L => {
+      const R = { lineStart: lw / 2, lineCount: L.pairs.length, ptStart: pw / 2, ptCount: L.pts.length };
+      for (let k = 0; k < L.pairs.length; k += 2) {
+        const a = L.pairs[k], b = L.pairs[k + 1];
+        lines[lw++] = pos[a * 2]; lines[lw++] = pos[a * 2 + 1];
+        lines[lw++] = pos[b * 2]; lines[lw++] = pos[b * 2 + 1];
+      }
+      for (const i of L.pts) { pts[pw++] = pos[i * 2]; pts[pw++] = pos[i * 2 + 1]; }
+      return R;
+    });
+    gl.bindBuffer(gl.ARRAY_BUFFER, hlPtBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, hlLnBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, lines, gl.DYNAMIC_DRAW);
+  }
+
+  function refreshHL() {
+    hl = pathHL || hoodHL;
+    uploadHL();
     setStatus();
     dirty = true;
   }
 
-  // --- Seleção: arestas que saem (dourado) e que entram (ciano) ---
-  function selectNode(i) {
-    sel = i;
-    selTitle = titleOf(i);
-    const id = dv.getUint32(i * 26, true), out = [], inn = [];
-    let nOut = 0, nIn = 0;
-    for (let e = 0; e < E; e++) {
-      const a = edgeU32[e * 2], b = edgeU32[e * 2 + 1];
-      if (a === id) { nOut++; if (out.length < 400) out.push(lookup[b - minId]); }
-      else if (b === id) { nIn++; if (inn.length < 400) inn.push(lookup[a - minId]); }
+  const SH = 2 ** Math.ceil(Math.log2(N + 1));
+  // ordena nós por grau decrescente (chave numérica = grau * SH + índice; sort nativo de Float64Array)
+  function byDegree(list) {
+    const keys = new Float64Array(list.length);
+    for (let k = 0; k < list.length; k++) keys[k] = deg[list[k]] * SH + list[k];
+    keys.sort();
+    const outList = new Int32Array(list.length);
+    for (let k = 0; k < keys.length; k++) outList[k] = keys[keys.length - 1 - k] % SH;
+    return outList;
+  }
+
+  function fitNodes(list) {
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const i of list) {
+      x0 = Math.min(x0, pos[i * 2]); x1 = Math.max(x1, pos[i * 2]);
+      y0 = Math.min(y0, pos[i * 2 + 1]); y1 = Math.max(y1, pos[i * 2 + 1]);
     }
-    const nb = [...new Set([...out, ...inn])];
-    const lines = [];
-    for (const o of out) lines.push(pos[i * 2], pos[i * 2 + 1], pos[o * 2], pos[o * 2 + 1]);
-    for (const o of inn) lines.push(pos[i * 2], pos[i * 2 + 1], pos[o * 2], pos[o * 2 + 1]);
-    hlOut = out.length * 2;
-    hlIn = inn.length * 2;
-    hlNeighbors = nb.length;
+    flyTo((x0 + x1) / 2, (y0 + y1) / 2, Math.min(40, Math.max(1.5, 1.6 / Math.max(x1 - x0, y1 - y0, 0.05))));
+  }
 
-    const pts = new Float32Array(2 + nb.length * 2);
-    pts[0] = pos[i * 2]; pts[1] = pos[i * 2 + 1];
-    nb.forEach((o, k) => { pts[2 + k * 2] = pos[o * 2]; pts[3 + k * 2] = pos[o * 2 + 1]; });
-    gl.bindBuffer(gl.ARRAY_BUFFER, hlPtBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
-    gl.bindBuffer(gl.ARRAY_BUFFER, hlLnBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lines), gl.DYNAMIC_DRAW);
+  // --- Vizinhança: BFS até `hoodDepth` a partir do nó selecionado ---
+  // Contagens por nível são exatas; o desenho mostra só os nós de maior grau
+  // (até `maxShown`, dividido entre os níveis), ligados por arestas da árvore da BFS.
+  function computeHood() {
+    if (sel < 0) { hoodHL = null; return refreshHL(); }
+    const r = GraphAlgos.bfs(g, sel, hoodDepth, hoodDir);
+    const reached = r.levelStart.length - 2;
+    const inTree = new Uint8Array(N);
+    inTree[sel] = 1;
+    const layers = [], labels = [], fit = [sel], rows = [];
+    let remaining = maxShown, nLabels = 0, level1 = [];
 
-    $('infoTitle').textContent = selTitle;
-    $('infoDeg').textContent = `Grau ${deg[i]} (↗${nOut} ↙${nIn})`;
-    $('infoComm').textContent = commTitle(comm[i]);
-    $('infoComm').style.borderColor = rgb(comm[i]);
-    $('wikiLink').href = 'https://pt.wikipedia.org/wiki/' + encodeURIComponent(selTitle.replace(/ /g, '_'));
+    for (let d = 1; d <= reached; d++) {
+      const cand = [];
+      for (let k = r.levelStart[d]; k < r.levelStart[d + 1]; k++) {
+        const v = r.order[k];
+        if (inTree[r.parent[v]]) cand.push(v);
+      }
+      const sorted = byDegree(cand);
+      if (d === 1) level1 = sorted;
+      const take = Math.min(sorted.length, Math.ceil(remaining / (reached - d + 1)));
+      remaining -= take;
+      const L = { color: [...LEVEL_COLORS[d - 1], Math.max(0.35, 0.85 - 0.15 * (d - 1))], size: 1 - 0.12 * (d - 1), thick: false, pairs: [], pts: [] };
+      for (let k = 0; k < take; k++) {
+        const v = sorted[k];
+        inTree[v] = 1;
+        L.pairs.push(r.parent[v], v);
+        L.pts.push(v);
+        fit.push(v);
+        if (nLabels < 14 && k < (d === 1 ? 8 : 3)) { labels.push([v, titleOf(v)]); nLabels++; }
+      }
+      layers.push(L);
+      rows.push({ d, total: r.levelStart[d + 1] - r.levelStart[d], shown: take });
+    }
+    hoodHL = { layers, centers: [sel], centerTitles: [selTitle], labels, fit };
 
-    const shown = nb.sort((a, b) => deg[b] - deg[a]).slice(0, 24);
-    $('infoNeighbors').textContent = `${shown.length} de ${nb.length}`;
-    const list = $('neighborsList');
+    // painel: níveis
+    const list = $('levelList');
     list.innerHTML = '';
+    for (const row of rows) {
+      const el = document.createElement('div');
+      el.className = 'levelRow';
+      el.innerHTML = `<span class="dot" style="background:${cssColor(LEVEL_COLORS[row.d - 1])}"></span><span>Nível ${row.d}</span>` +
+        `<span class="cnt">${row.total.toLocaleString()}${row.shown < row.total ? ` (${row.shown.toLocaleString()} desenhados)` : ''}</span>`;
+      list.appendChild(el);
+    }
+    if (!rows.length) list.innerHTML = '<div class="hint">Nenhum link nessa direção.</div>';
+    const total = r.order.length - 1;
+    $('fitHood').textContent = `Enquadrar vizinhança (${total.toLocaleString()} artigos)`;
+
+    // painel: conexões diretas
+    const shown = level1.slice(0, 24);
+    $('infoNeighbors').textContent = `${shown.length} de ${level1.length.toLocaleString()}`;
+    const nl = $('neighborsList');
+    nl.innerHTML = '';
     for (const ni of shown) {
       const chip = document.createElement('span');
       chip.className = 'neighborChip';
       chip.textContent = titleOf(ni);
       chip.style.borderColor = rgb(comm[ni]);
       chip.onclick = () => { selectNode(ni); flyTo(pos[ni * 2], pos[ni * 2 + 1]); };
-      list.appendChild(chip);
+      nl.appendChild(chip);
     }
+    refreshHL();
+  }
+
+  function clearSelection() {
+    sel = -1;
+    hoodHL = null;
+    infoPanel.classList.add('hidden');
+    refreshHL();
+  }
+
+  function selectNode(i) {
+    sel = i;
+    selTitle = titleOf(i);
+    pathHL = null;
+    $('infoTitle').textContent = selTitle;
+    $('infoDeg').textContent = `Grau ${deg[i]} (↗${GraphAlgos.outDegree(g, i)} ↙${GraphAlgos.inDegree(g, i)})`;
+    $('infoComm').textContent = commTitle(comm[i]);
+    $('infoComm').style.borderColor = rgb(comm[i]);
+    $('wikiLink').href = 'https://pt.wikipedia.org/wiki/' + encodeURIComponent(selTitle.replace(/ /g, '_'));
     infoPanel.classList.remove('hidden');
-    setStatus();
-    dirty = true;
+    computeHood();
   }
 
   const goto = i => { selectNode(i); flyTo(pos[i * 2], pos[i * 2 + 1], 12); };
   $('clearSel').onclick = clearSelection;
 
-  // --- Busca (títulos que começam com o termo vêm primeiro; depois por grau) ---
+  $('sliderDepth').oninput = e => { $('valDepth').textContent = e.target.value; };
+  $('sliderDepth').onchange = e => { hoodDepth = +e.target.value; computeHood(); if (hoodHL) fitNodes(hoodHL.fit); };
+  $('sliderMaxShown').oninput = e => { $('valMaxShown').textContent = (+e.target.value).toLocaleString(); };
+  $('sliderMaxShown').onchange = e => { maxShown = +e.target.value; computeHood(); };
+  $('hoodDir').onchange = e => { hoodDir = e.target.value; computeHood(); };
+  $('fitHood').onclick = () => { if (hoodHL) fitNodes(hoodHL.fit); };
+
+  // --- Busca: títulos que começam com o termo vêm primeiro; depois por grau ---
+  // O índice rápido só tem artigos de grau >= 60; "Buscar em todos" varre todos os títulos.
   const pool = [];
   for (let i = 0; i < N; i++) if (deg[i] >= 60) { const t = titleOf(i); pool.push({ i, t, l: t.toLowerCase(), d: deg[i] }); }
   pool.sort((a, b) => b.d - a.d);
-  let firstMatch = -1;
+  const rank = (arr, q) => arr.sort((a, b) => (b.l.startsWith(q) - a.l.startsWith(q)) || (b.d - a.d)).slice(0, 8);
 
-  searchInput.oninput = () => {
-    const q = searchInput.value.trim().toLowerCase();
-    firstMatch = -1;
-    if (q.length < 2) return searchResults.classList.add('hidden');
-    const m = pool.filter(p => p.l.includes(q)).slice(0, 200)
-      .sort((a, b) => (b.l.startsWith(q) - a.l.startsWith(q))).slice(0, 8);
-    if (m.length) firstMatch = m[0].i;
-    searchResults.innerHTML = m.length ? '' : '<div class="searchItem" style="cursor:default">Nenhum artigo encontrado</div>';
-    for (const p of m) {
-      const item = document.createElement('div');
-      item.className = 'searchItem';
-      item.innerHTML = `<span>${esc(p.t)}</span><span class="searchDeg">${p.d}</span>`;
-      item.onclick = () => { searchInput.value = p.t; searchResults.classList.add('hidden'); goto(p.i); };
-      searchResults.appendChild(item);
+  function fullSearch(q) {
+    const m = [];
+    for (let i = 0; i < N && m.length < 3000; i++) {
+      const t = titleOf(i), l = t.toLowerCase();
+      if (l.includes(q)) m.push({ i, t, l, d: deg[i] });
     }
-    searchResults.classList.remove('hidden');
+    return rank(m, q);
+  }
+
+  function makeSearch(input, results, onPick, onEdit) {
+    let first = null;
+    const hide = () => results.classList.add('hidden');
+    const render = (m, q, full) => {
+      first = m.length ? m[0] : null;
+      results.innerHTML = m.length ? '' : '<div class="searchItem" style="cursor:default">Nenhum artigo encontrado</div>';
+      for (const p of m) {
+        const item = document.createElement('div');
+        item.className = 'searchItem';
+        item.innerHTML = `<span>${esc(p.t)}</span><span class="searchDeg">${p.d}</span>`;
+        item.onclick = () => { hide(); onPick(p); };
+        results.appendChild(item);
+      }
+      if (!full) {
+        const more = document.createElement('div');
+        more.className = 'searchItem';
+        more.style.color = '#7dd3fc';
+        more.textContent = 'Buscar em todos os artigos (inclui os pouco conectados)';
+        more.onclick = e => {
+          e.stopPropagation();
+          more.textContent = 'Buscando...';
+          setTimeout(() => render(fullSearch(q), q, true));
+        };
+        results.appendChild(more);
+      }
+      results.classList.remove('hidden');
+    };
+    input.oninput = () => {
+      if (onEdit) onEdit();
+      const q = input.value.trim().toLowerCase();
+      first = null;
+      if (q.length < 2) return hide();
+      render(rank(pool.filter(p => p.l.includes(q)).slice(0, 200), q), q, false);
+    };
+    input.onkeydown = e => {
+      if (e.key === 'Enter' && first) { hide(); onPick(first); input.blur(); }
+    };
+    document.addEventListener('click', e => {
+      if (!input.contains(e.target) && !results.contains(e.target)) hide();
+    });
+  }
+
+  makeSearch(searchInput, searchResults, p => { searchInput.value = p.t; goto(p.i); });
+
+  // --- Menor caminho ---
+  const pathPanel = $('pathPanel'), pathResult = $('pathResult');
+  let pathFrom = -1, pathTo = -1;
+  const pickInto = (inputId, set) => p => { $(inputId).value = p.t; set(p.i); };
+  makeSearch($('pathFrom'), $('pathFromResults'), pickInto('pathFrom', i => pathFrom = i), () => { pathFrom = -1; });
+  makeSearch($('pathTo'), $('pathToResults'), pickInto('pathTo', i => pathTo = i), () => { pathTo = -1; });
+
+  const openPath = () => pathPanel.classList.remove('hidden');
+  $('btnPath').onclick = () => pathPanel.classList.toggle('hidden');
+  $('closePath').onclick = () => pathPanel.classList.add('hidden');
+  $('setFrom').onclick = () => { if (sel < 0) return; pathFrom = sel; $('pathFrom').value = selTitle; openPath(); };
+  $('setTo').onclick = () => { if (sel < 0) return; pathTo = sel; $('pathTo').value = selTitle; openPath(); };
+  $('pathSwap').onclick = () => {
+    [pathFrom, pathTo] = [pathTo, pathFrom];
+    [$('pathFrom').value, $('pathTo').value] = [$('pathTo').value, $('pathFrom').value];
   };
-  searchInput.onkeydown = e => {
-    if (e.key === 'Enter' && firstMatch >= 0) { searchResults.classList.add('hidden'); goto(firstMatch); searchInput.blur(); }
+
+  function clearPath() {
+    pathHL = null;
+    pathResult.innerHTML = '';
+    refreshHL();
+  }
+  $('pathClear').onclick = clearPath;
+  $('chkPathOnly').onchange = e => { pathOnly = e.target.checked; hov = -1; dirty = true; };
+
+  $('pathGo').onclick = () => {
+    if (pathFrom < 0 || pathTo < 0) {
+      pathResult.innerHTML = '<div class="warn">Escolha origem e destino na lista de sugestões.</div>';
+      return;
+    }
+    pathResult.textContent = 'Calculando...';
+    setTimeout(() => {
+      const directed = $('pathDir').value === 'dir';
+      const t0 = performance.now();
+      const r = GraphAlgos.shortestPath(g, pathFrom, pathTo, directed);
+      const ms = Math.round(performance.now() - t0);
+      const info = `${r.visited.toLocaleString()} artigos explorados em ${ms} ms`;
+      if (!r.path) {
+        pathHL = null;
+        pathResult.innerHTML = `<div class="summary warn">Não há caminho ${directed ? 'seguindo o sentido dos links' : 'entre esses artigos'}.` +
+          `${directed ? ' Tente "Ignorar o sentido".' : ''}</div><div class="hint">${info}</div>`;
+        return refreshHL();
+      }
+      const p = r.path;
+      sel = -1; hoodHL = null;
+      infoPanel.classList.add('hidden');
+      const inner = p.slice(1, -1);
+      pathHL = {
+        layers: [{ color: PATH_COLOR, size: 1.1, thick: true, pairs: p.flatMap((v, k) => k ? [p[k - 1], v] : []), pts: inner }],
+        centers: [p[0], p[p.length - 1]],
+        centerTitles: [titleOf(p[0]), titleOf(p[p.length - 1])],
+        labels: inner.map(v => [v, titleOf(v)]),
+        fit: p,
+        status: `Caminho: ${r.length} link${r.length === 1 ? '' : 's'}`,
+      };
+      pathResult.innerHTML = `<div class="summary">${r.length === 0 ? 'Origem e destino são o mesmo artigo.' :
+        `Menor caminho: <b>${r.length}</b> link${r.length === 1 ? '' : 's'}`}<div class="hint">${info}</div></div>`;
+      p.forEach((v, k) => {
+        if (k) {
+          const f = GraphAlgos.hasEdge(g, p[k - 1], v), b = GraphAlgos.hasEdge(g, v, p[k - 1]);
+          const a = document.createElement('div');
+          a.className = 'pathArrow';
+          a.textContent = f && b ? '↕ (links nos dois sentidos)' : f ? '↓ linka para' : '↑ é linkado por';
+          pathResult.appendChild(a);
+        }
+        const step = document.createElement('div');
+        step.className = 'pathStep';
+        const chip = document.createElement('span');
+        chip.className = 'neighborChip';
+        chip.textContent = titleOf(v);
+        chip.style.borderColor = rgb(comm[v]);
+        chip.onclick = () => flyTo(pos[v * 2], pos[v * 2 + 1], 12);
+        step.appendChild(chip);
+        pathResult.appendChild(step);
+      });
+      refreshHL();
+      fitNodes(p);
+    });
   };
-  document.addEventListener('click', e => {
-    if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) searchResults.classList.add('hidden');
-  });
+
   addEventListener('keydown', e => {
-    if (e.key === 'Escape') { clearSelection(); searchInput.blur(); }
-    else if (e.key === '/' && document.activeElement !== searchInput) { e.preventDefault(); searchInput.focus(); }
+    if (e.key === 'Escape') { clearSelection(); clearPath(); document.activeElement.blur(); }
+    else if (e.key === '/' && !/INPUT|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); searchInput.focus(); }
   });
 
   // --- Espalhamento / gravidade ao vivo: pos = centroide*S + (original - centroide)*G, renormalizado ---
@@ -553,11 +854,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       ev[k * 4] = pos[s * 2]; ev[k * 4 + 1] = pos[s * 2 + 1];
       ev[k * 4 + 2] = pos[t * 2]; ev[k * 4 + 3] = pos[t * 2 + 1];
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, pos);
+    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, byRank(pos, 2));
     gl.bindBuffer(gl.ARRAY_BUFFER, edgeBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, ev);
     buildGrid();
     hov = -1;
-    if (sel >= 0) selectNode(sel);
+    uploadHL();
     dirty = true;
   }
   const bindLayout = (id, fn) => {
@@ -572,6 +873,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   bind('sliderDeg', v => { minDeg = v; $('valDeg').textContent = v; });
   bind('sliderSize', v => { nodeSize = v; $('valSize').textContent = v.toFixed(1) + 'x'; });
   bind('sliderEdge', v => { edgeAlpha = v; $('valEdge').textContent = v.toFixed(3); });
+  // escala logarítmica: 0 -> 1.000 nós, 1000 -> todos
+  const topNFromSlider = v => v >= 1000 ? N : Math.round(1000 * Math.pow(N / 1000, v / 1000));
+  const showTopN = () => $('valTopN').textContent = topN >= N ? 'todos' : topN.toLocaleString();
+  $('sliderTopN').value = Math.round(1000 * Math.log(topN / 1000) / Math.log(N / 1000));
+  showTopN();
+  bind('sliderTopN', v => { topN = topNFromSlider(v); showTopN(); hov = -1; });
   bind('sliderDens', v => { density = v; $('valDens').textContent = Math.round(v * 100) + '%'; });
   $('chkEdges').onchange = e => { showEdges = e.target.checked; dirty = true; };
   $('chkLabels').onchange = e => { showLabels = e.target.checked; dirty = true; };
@@ -582,7 +889,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (deg[i] >= 15) return goto(i);
     }
   };
-  $('btnReset').onclick = () => { target = { zoom: 1, panX: 0, panY: 0 }; clearSelection(); setFilter(-1); };
+  $('btnReset').onclick = () => { target = { zoom: 1, panX: 0, panY: 0 }; clearSelection(); clearPath(); setFilter(-1); };
 
   // --- Comunidades ---
   const rows = new Map();

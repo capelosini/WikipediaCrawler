@@ -19,6 +19,17 @@ Abra http://localhost:8000/ (não abra via `file://`).
 - Hover: título, grau e comunidade.
 - Clique: seleciona o nó e destaca vizinhos e arestas.
 - Painel "Comunidades": filtra pelas 20 maiores.
+- Busca: digite um título (índice rápido para artigos com grau >= 60; "Buscar em todos" varre todos os títulos).
+- Vizinhança: com um nó selecionado, ajuste a **profundidade** (1 a 5), o sentido dos links
+  (saem / entram / ambos) e o máximo de nós desenhados. As contagens por nível são exatas;
+  o desenho mostra os nós de maior grau de cada nível, ligados pela árvore da BFS.
+- Menor caminho: botão "Caminho" (ou "Usar como origem/destino" no painel do nó). BFS bidirecional,
+  seguindo o sentido dos links ou ignorando-o. Mostra, a cada passo, o sentido real do link.
+- Os algoritmos estão em `frontend/graph.js`. Testes: `jsc frontend/graph.js frontend/test/graph.test.js`
+  (jsc: `/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc`).
+- "Máx. nós (top N por grau)": desenha só os N artigos de maior grau e as arestas entre eles
+  (padrão 200.000). Os buffers da GPU ficam ordenados por grau, então o resto nem é processado.
+- Memória: o navegador monta um índice de adjacência (~240 MB para 30M arestas) ao carregar.
 - Renderização WebGL2 (3,58M nós / 30M arestas); `pyvis`/`Dash` não suportam essa escala.
 
 ### Test docker container for MongoDB
