@@ -101,8 +101,8 @@ body, html {
   font-size: 0.82rem;
 }
 
-.searchItem:hover {
-  background: rgba(56, 189, 248, 0.15);
+.searchItem:hover, .searchItem.focused {
+  background: rgba(56, 189, 248, 0.2);
   color: #fff;
 }
 
@@ -136,6 +136,13 @@ button:hover {
   border-color: #38bdf8;
   color: #fff;
   transform: translateY(-1px);
+}
+
+button.active {
+  background: rgba(56, 189, 248, 0.3);
+  border-color: #38bdf8;
+  color: #fff;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
 }
 
 /* Barra Lateral */
@@ -423,7 +430,7 @@ input[type="range"]::-webkit-slider-thumb {
 #labelCanvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 5; }
 body::after {
   content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 6;
-  background: radial-gradient(circle at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(ellipse at 50% 50%, transparent 72%, rgba(0, 0, 0, 0.20) 100%);
 }
 .hint { font-size: 0.7rem; color: #64748b; margin: 6px 0 8px; line-height: 1.4; }
 kbd { background: rgba(255,255,255,.1); border-radius: 3px; padding: 0 4px; font-size: .68rem; color: #cbd5e1; }
