@@ -1,9 +1,9 @@
 # Wikipedia Crawler
 
-### Layout do grafo (Louvain + force-directed)
+### Layout do grafo (Multinível espectral + ForceAtlas2/LinLog com repulsão FFT)
 ```
 python3 layout.py   # 1a vez: Louvain (~7 min, ~6 GB RAM) -> comm_levels.npy
-python3 layout.py   # 2a vez: comunidades + refinamento (~3 min) -> frontend/nodes.bin
+python3 layout.py   # 2a vez: layout livre em 3 estágios -> frontend/nodes.bin
 ```
 Regrava `x/y`, grau e comunidade em `frontend/nodes.bin` (backup em `nodes.orig.bin`)
 e gera `frontend/layout_preview.png`. Requer `python-igraph`, `numpy`, `scipy`, `matplotlib`.
