@@ -1,8 +1,11 @@
 // Testes de graph.js (CSR, BFS por profundidade, menor caminho bidirecional),
-// comparados com uma BFS ingênua em grafos aleatórios. Rodar da raiz do projeto com o
-// jsc que já vem no macOS (alias: jsc=/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc):
+// comparados com uma BFS ingênua em grafos aleatórios. Rodar da raiz do projeto com Node ou jsc:
+//   node frontend/test/graph.test.js
 //   jsc frontend/graph.js frontend/test/graph.test.js
-const { buildCSR, bfs, shortestPath } = GraphAlgos;
+if (typeof GraphAlgos === 'undefined' && typeof require === 'function') {
+  require('../graph.js');
+}
+const { buildCSR, bfs, bfsFast, shortestPath } = GraphAlgos;
 const out = typeof print === 'function' ? print : console.log;
 let failures = 0, checks = 0;
 const check = (cond, msg) => { checks++; if (!cond) { failures++; out('FALHOU: ' + msg); } };
@@ -82,12 +85,38 @@ for (let trial = 0; trial < 200; trial++) {
   }
 }
 
-// Arestas com id desconhecido são ignoradas
+// Arestas com id desconhecido ou lacunas (< 0 no lookup) são ignoradas; suporte a lookup por função
 {
-  const lookup = new Uint32Array([0, 1, 2]);
-  const g = buildCSR(new Uint32Array([10, 11, 11, 99, 5, 10]), 3, 3, lookup, 10);
-  check(g.E === 1, 'arestas com ids fora do lookup devem ser ignoradas');
+  const lookup = new Int32Array([0, -1, 1, 2]);
+  const g = buildCSR(new Uint32Array([10, 12, 10, 11, 11, 13, 12, 99, 5, 10]), 5, 3, lookup, 10);
+  check(g.E === 1 && g.outAdj[0] === 1 && g.outOff[1] === 1, 'arestas com lacunas -1 ou ids fora do lookup devem ser ignoradas');
+
+  const map = new Map([[100, 0], [500000000, 1], [900000000, 2]]);
+  const fnLookup = id => { const v = map.get(id); return v === undefined ? -1 : v; };
+  const gFn = buildCSR(new Uint32Array([100, 500000000, 500000000, 900000000, 100, 42]), 3, 3, fnLookup, 0);
+  check(gFn.E === 2 && shortestPath(gFn, 0, 2, true).length === 2, 'buildCSR com função de lookup esparsa e shortestPath zero-alloc');
 }
+
+// Equivalência bfsFast vs bfs e reuso de carimbo em shortestPath
+{
+  const { edges, g } = makeGraph(30, 80, 50);
+  for (const mode of ['out', 'in', 'both']) {
+    const r0 = bfs(g, 0, 3, mode);
+    const r1 = bfsFast(g, 0, 3, mode);
+    check(r0.order.length === r1.order.length, `bfsFast deve alcançar mesma contagem (${mode})`);
+    let same = true;
+    for (const v of r1.order) if (r1.dist[v] !== r0.dist[v]) same = false;
+    check(same, `bfsFast deve manter distâncias exatas (${mode})`);
+  }
+  // Múltiplas chamadas seguidas a shortestPath garantem reuso limpo de carimbo
+  for (let k = 0; k < 5; k++) {
+    const s = (k * 3) % 30, t = (k * 7 + 5) % 30;
+    const ref = refDist(30, edges, s, 'out')[t];
+    const r = shortestPath(g, s, t, true);
+    check(r.length === ref, `shortestPath repetido (${s}->${t}) quer ${ref} obteve ${r.length}`);
+  }
+}
+
 
 out(failures ? `${failures} FALHA(S) em ${checks} verificações` : `OK: ${checks} verificações`);
 if (failures && typeof quit === 'function') quit(1);
