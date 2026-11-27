@@ -18,6 +18,12 @@ Abra http://localhost:8000/ (não abra via `file://`).
 
 - Hover: título, grau e comunidade.
 - Clique: seleciona o nó e destaca vizinhos e arestas.
+- **Modo Rede** (`🕸️ Rede`): selecione um artigo para ver sua vizinhança de profundidade 1;
+  dê **duplo clique** em um nó já expandido para crescer mais um nível, ou em outro nó da
+  rede para expandir +1 nível a partir dele mantendo toda a estrutura existente. O subgrafo é
+  organizado e dispersado dinamicamente em tempo real por um layout de forças próprio
+  (Barnes-Hut + molas), posicionando os nós apenas em relação entre si. Inclui controle de
+  espaçamento, botão de reorganização, opacidade adaptativa de arestas e nós de alto contraste.
 - Painel "Comunidades": filtra pelas 20 maiores.
 - Busca: digite um título (índice rápido para artigos com grau >= 60; "Buscar em todos" varre todos os títulos, com navegação por teclado).
 - Vizinhança: com um nó selecionado, ajuste a **profundidade** (1 a 5), o sentido dos links

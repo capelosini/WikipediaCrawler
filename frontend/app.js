@@ -125,10 +125,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   let minDeg = 0, nodeSize = 1, edgeAlpha = 0.07;
   let filterComm = -1, sel = -1, hov = -1, showEdges = true, showLabels = true;
   let selTitle = '';
-  // Destaque atual (vizinhança ou caminho): { layers, centers, labels } -> ver uploadHL()
+  // Destaque atual (vizinhança, caminho ou Modo Rede): { layers, centers, labels } -> ver uploadHL()
   let hoodHL = null, pathHL = null, pathOnly = true;
+  let netMode = false, netCross = false, netDir = 'both', netCap = 3000, netEdgeAlpha = 0.16;
+  const netSources = new Map(), netSim = GraphAlgos.createNetLayout();
+  let netHL = null, netNodeSet = new Set(), lastNetSeedMs = 0, savedGlobalCam = null;
+  // Com um caminho ou rede na tela, o grafo de fundo é ocultado (no Modo Rede, os nós usam layout próprio).
   const focusPath = () => pathOnly && pathHL !== null;
-  const hideBg = () => focusPath();
+  const inLocalNet = () => netMode && netHL !== null;
+  const hideBg = () => focusPath() || inLocalNet();
+  const nodeX = i => {
+    if (inLocalNet()) { const k = netSim.idxOf.get(i); if (k !== undefined) return netSim.x[k]; }
+    return pos[i * 2];
+  };
+  const nodeY = i => {
+    if (inLocalNet()) { const k = netSim.idxOf.get(i); if (k !== undefined) return netSim.y[k]; }
+    return pos[i * 2 + 1];
+  };
   let hl = null, hlRanges = null, hoodDepth = 1, hoodDir = 'both', maxShown = 2000;
 
   // --- Câmera ---
@@ -185,6 +198,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     zoomAt(e.clientX * dpr, e.clientY * dpr, Math.exp(-e.deltaY * 0.0015));
   }, { passive: false });
   canvas.ondblclick = e => {
+    if (netMode) {
+      if (performance.now() - lastNetSeedMs < 350) return;
+      const h = nearest(e.clientX * dpr, e.clientY * dpr);
+      if (h >= 0) {
+        expandNetNode(h, false);
+        selectNodeInNet(h);
+        return;
+      }
+    }
     const s = scale();
     flyTo((e.clientX * dpr - transX()) / s, (e.clientY * dpr - transY()) / s, cam.zoom * 2.5);
   };
@@ -463,8 +485,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('edgeCount').innerText = E.toLocaleString();
   $('commCount').innerText = C.toLocaleString();
   const setStatus = () => statusEl.innerText = pathHL ? pathHL.status
+    : (netMode && netHL) ? netHL.status
     : sel >= 0 ? 'Selecionado: ' + selTitle
     : filterComm >= 0 ? 'Comunidade: ' + commTitle(filterComm)
+    : netMode ? 'Modo Rede: selecione ou busque um artigo'
     : (edgeVerts / 2).toLocaleString() + ' arestas estruturais';
   setStatus();
 
@@ -602,11 +626,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     if (hl) {
-      hl.centers.forEach((i, k) => put(hl.centerTitles[k], pos[i * 2], pos[i * 2 + 1] - 16 * dpr / s, 14, '#fff', 1, true));
+      hl.centers.forEach((i, k) => put(hl.centerTitles[k], nodeX(i), nodeY(i) - 16 * dpr / s, 14, '#fff', 1, true));
       let hlPlaced = 0;
       for (const [i, t] of hl.labels) {
         const before = placed.length;
-        put(t, pos[i * 2], pos[i * 2 + 1] - 12 * dpr / s, 12, '#fde68a', 1);
+        put(t, nodeX(i), nodeY(i) - 12 * dpr / s, 12, '#fde68a', 1);
         if (placed.length > before && ++hlPlaced >= 85) break;
       }
     }
@@ -628,6 +652,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   (function frame() {
+    if (inLocalNet() && netSim.alpha > 0.004) {
+      GraphAlgos.stepNetLayout(netSim, netSim.nodes.length > 1200 ? 1 : 2);
+      updateHLPositions();
+      dirty = labelsDirty = true;
+    }
     if (target) {
       cam.zoom += (target.zoom - cam.zoom) * 0.12;
       cam.panX += (target.panX - cam.panX) * 0.12;
@@ -655,6 +684,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       return hit;
     }
+    if (inLocalNet()) {
+      const ns = netSim.nodes, nx = netSim.x, ny = netSim.y;
+      for (let k = 0; k < ns.length; k++) {
+        const dx = nx[k] - wx, dy = ny[k] - wy, d = dx * dx + dy * dy;
+        if (d < best) { best = d; hit = ns[k]; }
+      }
+      return hit;
+    }
     for (let gy = gcellY(wy - r); gy <= gcellY(wy + r); gy++)
       for (let gx = gcellX(wx - r); gx <= gcellX(wx + r); gx++)
         for (let i = gridHead[gy * GS + gx]; i !== -1; i = gridNext[i]) {
@@ -672,7 +709,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       canvas.style.cursor = h >= 0 ? 'pointer' : 'grab';
       if (h >= 0) {
         gl.bindBuffer(gl.ARRAY_BUFFER, hovBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, pos.slice(h * 2, h * 2 + 2), gl.DYNAMIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([nodeX(h), nodeY(h)]), gl.DYNAMIC_DRAW);
       }
       dirty = true;
     }
@@ -695,6 +732,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (h >= 0) { selectNodeInPath(h); flyTo(pos[h * 2], pos[h * 2 + 1], Math.max(cam.zoom, 10)); }
       return;
     }
+    if (netMode) {
+      if (h >= 0) {
+        if (netSources.size === 0) {
+          savedGlobalCam = { zoom: cam.zoom, panX: cam.panX, panY: cam.panY };
+          lastNetSeedMs = performance.now();
+          netSources.set(h, 1);
+          computeNet();
+          if (netHL) fitNodes(netHL.fit);
+        }
+        selectNodeInNet(h);
+      } else if (netSources.size > 0) {
+        sel = -1;
+        infoPanel.classList.add('hidden');
+        $('expandFromInfo').classList.add('hidden');
+        setStatus();
+        dirty = true;
+      }
+      return;
+    }
     h < 0 ? clearSelection() : selectNode(h);
   };
 
@@ -708,7 +764,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   function updateSelBuf() {
     if (sel < 0) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, selBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, pos.slice(sel * 2, sel * 2 + 2), gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([nodeX(sel), nodeY(sel)]), gl.DYNAMIC_DRAW);
+  }
+
+  function fillHLBuffers(pts, lines) {
+    let lw = 0, pw = 0;
+    for (const i of hl.centers) { pts[pw++] = nodeX(i); pts[pw++] = nodeY(i); }
+    for (const L of hl.layers) {
+      for (let k = 0; k < L.pairs.length; k += 2) {
+        const a = L.pairs[k], b = L.pairs[k + 1];
+        lines[lw++] = nodeX(a); lines[lw++] = nodeY(a);
+        lines[lw++] = nodeX(b); lines[lw++] = nodeY(b);
+      }
+      for (const i of L.pts) { pts[pw++] = nodeX(i); pts[pw++] = nodeY(i); }
+    }
   }
 
   function uploadHL() {
@@ -717,23 +786,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     for (const L of hl.layers) { nPairs += L.pairs.length / 2; nPts += L.pts.length; }
     const lines = new Float32Array(nPairs * 4), pts = new Float32Array(nPts * 2), scales = new Float32Array(nPts);
     let lw = 0, pw = 0, sw = 0;
-    for (const i of hl.centers) {
-      pts[pw++] = pos[i * 2]; pts[pw++] = pos[i * 2 + 1];
-      scales[sw++] = 1.35;
-    }
+    for (let k = 0; k < hl.centers.length; k++) scales[sw++] = 1.35;
     hlRanges = hl.layers.map(L => {
       const R = { lineStart: lw / 2, lineCount: L.pairs.length, ptStart: pw / 2, ptCount: L.pts.length };
-      for (let k = 0; k < L.pairs.length; k += 2) {
-        const a = L.pairs[k], b = L.pairs[k + 1];
-        lines[lw++] = pos[a * 2]; lines[lw++] = pos[a * 2 + 1];
-        lines[lw++] = pos[b * 2]; lines[lw++] = pos[b * 2 + 1];
-      }
-      for (const i of L.pts) {
-        pts[pw++] = pos[i * 2]; pts[pw++] = pos[i * 2 + 1];
-        scales[sw++] = 1.0 + 0.70 * Math.min(1, Math.log(1 + deg[i]) / 8.5);
-      }
+      lw += L.pairs.length * 2;
+      pw += L.pts.length * 2;
+      for (const i of L.pts) scales[sw++] = 1.0 + 0.70 * Math.min(1, Math.log(1 + deg[i]) / 8.5);
       return R;
     });
+    hl._pts = pts;
+    hl._lines = lines;
+    fillHLBuffers(pts, lines);
     gl.bindBuffer(gl.ARRAY_BUFFER, hlPtBuf);
     gl.bufferData(gl.ARRAY_BUFFER, pts, gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, hlPtScaleBuf);
@@ -742,8 +805,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     gl.bufferData(gl.ARRAY_BUFFER, lines, gl.DYNAMIC_DRAW);
   }
 
+  function updateHLPositions() {
+    if (!hl || !hl._pts || !hl._lines) return;
+    fillHLBuffers(hl._pts, hl._lines);
+    gl.bindBuffer(gl.ARRAY_BUFFER, hlPtBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, hl._pts);
+    gl.bindBuffer(gl.ARRAY_BUFFER, hlLnBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, hl._lines);
+    if (sel >= 0) updateSelBuf();
+    if (hov >= 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, hovBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([nodeX(hov), nodeY(hov)]), gl.DYNAMIC_DRAW);
+    }
+  }
+
   function refreshHL() {
-    hl = pathHL || hoodHL;
+    hl = pathHL || (netMode ? netHL : hoodHL);
     uploadHL();
     setStatus();
     dirty = labelsDirty = true;
@@ -763,8 +840,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   function fitNodes(list) {
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
     for (const i of list) {
-      x0 = Math.min(x0, pos[i * 2]); x1 = Math.max(x1, pos[i * 2]);
-      y0 = Math.min(y0, pos[i * 2 + 1]); y1 = Math.max(y1, pos[i * 2 + 1]);
+      const x = nodeX(i), y = nodeY(i);
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+      y0 = Math.min(y0, y); y1 = Math.max(y1, y);
     }
     flyTo((x0 + x1) / 2, (y0 + y1) / 2, Math.min(40, Math.max(0.1, 1.35 / Math.max(x1 - x0, y1 - y0, 0.04))));
   }
@@ -780,7 +858,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       chip.textContent = titleOf(ni);
       chip.style.borderColor = rgb(comm[ni]);
       chip.onclick = () => {
-        if (focusPath()) {
+        if (netMode) {
+          if (!netNodeSet.has(ni)) { netSources.set(ni, 1); computeNet(); }
+          selectNodeInNet(ni);
+          flyTo(nodeX(ni), nodeY(ni), Math.max(cam.zoom, 4));
+        } else if (focusPath()) {
           selectNodeInPath(ni);
           flyTo(pos[ni * 2], pos[ni * 2 + 1]);
         } else {
@@ -869,29 +951,273 @@ document.addEventListener('DOMContentLoaded', async () => {
     sel = -1;
     hoodHL = null;
     infoPanel.classList.add('hidden');
+    $('expandFromInfo').classList.add('hidden');
     refreshHL();
   }
 
   function selectNode(i) {
     populateInfoPanel(i);
     $('hoodControls').classList.remove('hidden');
+    $('startNet').classList.remove('hidden');
+    $('expandFromInfo').classList.add('hidden');
     computeHood();
+  }
+
+  function selectNodeInNet(i) {
+    populateInfoPanel(i);
+    $('hoodControls').classList.add('hidden');
+    $('startNet').classList.add('hidden');
+    $('expandFromInfo').classList.remove('hidden');
+    const seen = new Set([i]), nb = [];
+    GraphAlgos.forEachNeighbor(g, i, netDir, v => { if (!seen.has(v)) { seen.add(v); nb.push(v); } });
+    fillNeighborsList(byDegree(nb));
+    setStatus();
+    dirty = labelsDirty = true;
   }
 
   function selectNodeInPath(i) {
     populateInfoPanel(i, true);
     $('hoodControls').classList.add('hidden');
+    $('startNet').classList.remove('hidden');
+    $('expandFromInfo').classList.add('hidden');
     const seen = new Set([i]), nb = [];
     GraphAlgos.forEachNeighbor(g, i, 'both', v => { if (!seen.has(v)) { seen.add(v); nb.push(v); } });
     fillNeighborsList(byDegree(nb));
     dirty = labelsDirty = true;
   }
 
+  // --- Modo Rede: múltiplas fontes com expansão incremental por duplo clique ---
+  function applyNetEdgeAlpha() {
+    if (!netHL) return;
+    let totalEdges = 0;
+    for (const L of netHL.layers) totalEdges += L.pairs.length / 2;
+    const effAlpha = netEdgeAlpha / (1 + 0.38 * Math.log10(1 + totalEdges / 50));
+    netHL.layers.forEach(L => {
+      if (L.isCross) L.lineAlpha = Math.max(0.015, effAlpha * 0.35);
+      else L.lineAlpha = Math.max(0.03, effAlpha * Math.pow(0.82, (L.hop || 1) - 1));
+    });
+  }
+
+  function computeNet(reheat = true) {
+    if (!netMode || netSources.size === 0) {
+      GraphAlgos.syncNetLayout(netSim, null);
+      netHL = null;
+      netNodeSet = new Set();
+      $('netSummary').textContent = 'Nenhum artigo na rede. Clique em um nó ou use a busca acima.';
+      $('netSourcesList').innerHTML = '';
+      return refreshHL();
+    }
+    const r = GraphAlgos.buildNetwork(g, Array.from(netSources.entries()), netDir, {
+      maxPerLevel: netCap, deg, includeCrossEdges: true
+    });
+    netNodeSet = new Set(r.nodes);
+    const centers = Array.from(netSources.keys());
+    GraphAlgos.syncNetLayout(netSim, r, { comm, sources: centers, reheat });
+    if (reheat) GraphAlgos.stepNetLayout(netSim, r.nodes.length > 1500 ? 12 : 22);
+
+    let maxHop = 1;
+    for (let k = 0; k < r.minHop.length; k++) if (r.minHop[k] > maxHop) maxHop = r.minHop[k];
+    for (let k = 0; k < r.treePairs.length; k++) if (r.treePairs[k][2] > maxHop) maxHop = r.treePairs[k][2];
+
+    const totalEdges = r.treePairs.length + (netCross ? r.crossPairs.length : 0);
+    const layers = [];
+    if (netCross && r.crossPairs.length > 0) {
+      const flat = [];
+      for (let k = 0; k < r.crossPairs.length; k++) flat.push(r.crossPairs[k][0], r.crossPairs[k][1]);
+      layers.push({ isCross: true, color: [0.45, 0.65, 0.90, 0.1], lineAlpha: 0.1, ptAlpha: 1.0, size: 0.7, thick: false, pairs: flat, pts: [] });
+    }
+    const ptsByHop = Array.from({ length: maxHop + 1 }, () => []);
+    const pairsByHop = Array.from({ length: maxHop + 1 }, () => []);
+    for (let k = 0; k < r.nodes.length; k++) {
+      const h = r.minHop[k];
+      if (h >= 1) ptsByHop[h].push(r.nodes[k]);
+    }
+    for (let k = 0; k < r.treePairs.length; k++) {
+      const [u, v, h] = r.treePairs[k];
+      pairsByHop[h].push(u, v);
+    }
+    for (let h = 1; h <= maxHop; h++) {
+      if (!ptsByHop[h].length && !pairsByHop[h].length) continue;
+      const col = LEVEL_COLORS[(h - 1) % LEVEL_COLORS.length];
+      layers.push({
+        hop: h,
+        color: [...col, 0.16],
+        lineAlpha: 0.16,
+        ptAlpha: 1.0,
+        size: Math.max(0.65, 1.0 - 0.08 * (h - 1)),
+        thick: false,
+        pairs: pairsByHop[h],
+        pts: ptsByHop[h]
+      });
+    }
+
+    const centerTitles = centers.map(titleOf);
+    const centerSet = new Set(centers);
+    const nonCenters = byDegree(r.nodes.filter(v => !centerSet.has(v)));
+    const labels = [];
+    for (let k = 0; k < nonCenters.length && labels.length < 1500; k++) labels.push([nonCenters[k], titleOf(nonCenters[k])]);
+
+    netHL = {
+      layers,
+      centers,
+      centerTitles,
+      labels,
+      fit: r.nodes,
+      status: `Rede: ${r.nodes.length.toLocaleString()} artigos · ${centers.length} expandido${centers.length > 1 ? 's' : ''}`
+    };
+    applyNetEdgeAlpha();
+
+    $('netSummary').textContent = `${r.nodes.length.toLocaleString()} artigos · ${totalEdges.toLocaleString()} arestas` +
+      (r.truncated ? ' (limitado pelo máx. por nível)' : '');
+
+    const listEl = $('netSourcesList');
+    listEl.innerHTML = '';
+    for (const [src, depth] of netSources.entries()) {
+      const row = document.createElement('div');
+      row.className = 'netSrcRow';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = rgb(comm[src]);
+      const name = document.createElement('span');
+      name.className = 'netSrcTitle';
+      name.textContent = titleOf(src);
+      name.title = name.textContent;
+      name.onclick = () => { selectNodeInNet(src); flyTo(nodeX(src), nodeY(src), Math.max(cam.zoom, 4)); };
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = `prof. ${depth}`;
+      const btnPlus = document.createElement('button');
+      btnPlus.textContent = '+1';
+      btnPlus.title = 'Expandir mais 1 nível a partir deste artigo';
+      btnPlus.onclick = () => { expandNetNode(src, false); selectNodeInNet(src); };
+      const btnDel = document.createElement('button');
+      btnDel.textContent = '✕';
+      btnDel.title = 'Remover esta expansão da rede';
+      btnDel.onclick = () => {
+        netSources.delete(src);
+        computeNet();
+        if (sel === src && netSources.size === 0) { sel = -1; infoPanel.classList.add('hidden'); }
+      };
+      row.append(dot, name, badge, btnPlus, btnDel);
+      listEl.appendChild(row);
+    }
+    refreshHL();
+    if (sel >= 0) updateSelBuf();
+  }
+
+  function expandNetNode(i, fitAfter = false) {
+    if (netSources.size === 0 && !savedGlobalCam) {
+      savedGlobalCam = { zoom: cam.zoom, panX: cam.panX, panY: cam.panY };
+    }
+    const cur = netSources.get(i) || 0;
+    const res = GraphAlgos.expandSourceDepth(g, netNodeSet, i, cur, netDir, 8);
+    if (res.added === 0 && cur > 0) {
+      $('netSummary').textContent = `Sem novos vizinhos para "${titleOf(i)}" nessa direção (rede: ${netNodeSet.size.toLocaleString()} artigos).`;
+      return;
+    }
+    if (res.depth === cur) {
+      if (!netSources.has(i)) netSources.set(i, 1);
+      else return;
+    } else {
+      netSources.set(i, res.depth);
+    }
+    computeNet();
+    if (fitAfter && netHL) fitNodes(netHL.fit);
+  }
+
+  function setNetMode(on, seedNode = -1) {
+    const wasOn = netMode;
+    netMode = on;
+    $('btnNet').classList.toggle('active', on);
+    $('netPanel').classList.toggle('hidden', !on);
+    if (on) {
+      if (!wasOn && !savedGlobalCam) savedGlobalCam = { zoom: cam.zoom, panX: cam.panX, panY: cam.panY };
+      clearPath();
+      pathPanel.classList.add('hidden');
+      $('btnPath').classList.remove('active');
+      hoodHL = null;
+      if (seedNode >= 0) {
+        netSources.clear();
+        netSources.set(seedNode, 1);
+        computeNet();
+        if (netHL) fitNodes(netHL.fit);
+        selectNodeInNet(seedNode);
+      } else if (netSources.size > 0) {
+        computeNet(false);
+        if (netHL) fitNodes(netHL.fit);
+        if (sel >= 0) selectNodeInNet(sel);
+      } else if (sel >= 0) {
+        netSources.set(sel, 1);
+        computeNet();
+        if (netHL) fitNodes(netHL.fit);
+        selectNodeInNet(sel);
+      } else {
+        computeNet();
+      }
+    } else {
+      $('hoodControls').classList.remove('hidden');
+      $('startNet').classList.remove('hidden');
+      $('expandFromInfo').classList.add('hidden');
+      if (sel >= 0) {
+        selectNode(sel);
+        flyTo(pos[sel * 2], pos[sel * 2 + 1], Math.max(savedGlobalCam ? savedGlobalCam.zoom : 1, 4));
+      } else {
+        if (savedGlobalCam) target = savedGlobalCam;
+        refreshHL();
+      }
+      savedGlobalCam = null;
+    }
+  }
+
   const goto = i => {
+    if (netMode) {
+      if (netSources.size === 0 && !savedGlobalCam) savedGlobalCam = { zoom: cam.zoom, panX: cam.panX, panY: cam.panY };
+      if (!netNodeSet.has(i)) { netSources.set(i, 1); computeNet(); }
+      selectNodeInNet(i);
+      flyTo(nodeX(i), nodeY(i), Math.max(cam.zoom, 4));
+      return;
+    }
     selectNode(i);
     flyTo(pos[i * 2], pos[i * 2 + 1], 12);
   };
   $('clearSel').onclick = clearSelection;
+
+  $('btnNet').onclick = () => setNetMode(!netMode);
+  $('closeNet').onclick = () => setNetMode(false);
+  $('startNet').onclick = () => setNetMode(true, sel);
+  $('expandFromInfo').onclick = () => { if (sel >= 0) { expandNetNode(sel, false); selectNodeInNet(sel); } };
+  $('netDir').onchange = e => { netDir = e.target.value; computeNet(); };
+  $('sliderNetCap').oninput = e => {
+    const v = +e.target.value;
+    $('valNetCap').textContent = v >= 10000 ? 'Todos' : v.toLocaleString();
+  };
+  $('sliderNetCap').onchange = e => {
+    const v = +e.target.value;
+    netCap = v >= 10000 ? 0 : v;
+    computeNet();
+  };
+  $('chkNetCross').onchange = e => { netCross = e.target.checked; computeNet(false); };
+  $('sliderNetEdge').oninput = e => {
+    netEdgeAlpha = +e.target.value;
+    $('valNetEdge').textContent = netEdgeAlpha.toFixed(2);
+    applyNetEdgeAlpha();
+    dirty = true;
+  };
+  $('sliderNetSpread').oninput = e => {
+    netSim.spread = +e.target.value;
+    $('valNetSpread').textContent = netSim.spread.toFixed(1) + 'x';
+    netSim.alpha = Math.max(netSim.alpha, 0.55);
+    dirty = true;
+  };
+  $('netRelax').onclick = () => {
+    if (inLocalNet()) { netSim.alpha = 0.9; dirty = true; }
+  };
+  $('netFit').onclick = () => { if (netHL) fitNodes(netHL.fit); };
+  $('netClear').onclick = () => {
+    netSources.clear();
+    computeNet();
+    if (savedGlobalCam) { target = savedGlobalCam; savedGlobalCam = null; }
+  };
 
   $('sliderDepth').oninput = e => { $('valDepth').textContent = e.target.value; };
   $('sliderDepth').onchange = e => { hoodDepth = +e.target.value; computeHood(); if (hoodHL) fitNodes(hoodHL.fit); };
@@ -984,6 +1310,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   makeSearch(searchInput, searchResults, p => { searchInput.value = p.t; goto(p.i); });
+  makeSearch($('netSearch'), $('netSearchResults'), p => {
+    $('netSearch').value = p.t;
+    expandNetNode(p.i, true);
+    selectNodeInNet(p.i);
+  });
 
   // --- Menor caminho ---
   const pathPanel = $('pathPanel'), pathResult = $('pathResult');
@@ -993,6 +1324,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   makeSearch($('pathTo'), $('pathToResults'), pickInto('pathTo', i => pathTo = i), () => { pathTo = -1; });
 
   const openPath = () => {
+    if (netMode) setNetMode(false);
     pathPanel.classList.remove('hidden');
     $('btnPath').classList.add('active');
   };
@@ -1083,6 +1415,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   addEventListener('keydown', e => {
     if (e.key === 'Escape') {
+      if (netMode) { netSources.clear(); setNetMode(false); }
       pathPanel.classList.add('hidden');
       $('btnPath').classList.remove('active');
       clearSelection(); clearPath(); document.activeElement.blur();
@@ -1143,6 +1476,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
   $('btnReset').onclick = () => {
+    savedGlobalCam = null;
+    if (netMode) { netSources.clear(); setNetMode(false); }
     pathPanel.classList.add('hidden');
     $('btnPath').classList.remove('active');
     target = { zoom: 1, panX: 0, panY: 0 }; clearSelection(); clearPath(); setFilter(-1);
@@ -1171,8 +1506,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function setFilter(c) {
-    if (c >= 0 && pathHL) {
-      clearPath(); pathPanel.classList.add('hidden'); $('btnPath').classList.remove('active');
+    if (c >= 0) {
+      if (pathHL) { clearPath(); pathPanel.classList.add('hidden'); $('btnPath').classList.remove('active'); }
+      if (netMode) setNetMode(false);
     }
     filterComm = c;
     clearSelection();

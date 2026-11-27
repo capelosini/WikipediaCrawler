@@ -462,3 +462,34 @@ select.textField option { background: #0f172a; }
 .pathStep { display: flex; align-items: center; gap: 6px; }
 .pathArrow { color: #f472b6; font-size: 0.8rem; padding-left: 10px; }
 .pathStep .neighborChip { flex: 0 1 auto; }
+
+/* --- Modo Rede --- */
+#netSourcesList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 8px 0;
+}
+.netSrcRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.76rem;
+}
+.netSrcTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  color: #e2e8f0;
+}
+.netSrcTitle:hover { color: #38bdf8; }
+.netSrcRow .badge { padding: 1px 6px; font-size: 0.68rem; flex: 0 0 auto; }
+.netSrcRow button { padding: 2px 7px; font-size: 0.7rem; flex: 0 0 auto; }

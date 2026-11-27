@@ -19,6 +19,7 @@
       </div>
       <div id="quickActions">
         <button id="btnRandom" title="Saltar para artigo aleatório">🎲 Aleatório</button>
+        <button id="btnNet" title="Modo Rede: selecione um nó e expanda com duplo clique">🕸️ Rede</button>
         <button id="btnPath" title="Menor caminho entre dois artigos">🧭 Caminho</button>
         <button id="btnReset" title="Centralizar e ajustar vista">⟲ Ajustar Vista</button>
       </div>
@@ -83,6 +84,47 @@
 
     <!-- Barra Lateral Direita -->
     <aside id="rightSidebar">
+      <!-- Modo Rede: expansão incremental a partir de nós escolhidos -->
+      <section id="netPanel" class="card hidden">
+        <div class="cardHeader">
+          <h3>Modo Rede</h3>
+          <button id="closeNet" title="Sair do modo rede">✕</button>
+        </div>
+        <p class="hint">Selecione um artigo para ver profundidade 1. Dê <b>duplo clique</b> em qualquer nó da rede para expandir +1 nível a partir dele mantendo o resto.</p>
+        <input id="netSearch" class="textField" type="text" placeholder="Buscar artigo para iniciar/expandir..." autocomplete="off">
+        <div id="netSearchResults" class="inlineResults hidden"></div>
+        <div class="controlRow">
+          <label class="fieldLabel">Links a seguir</label>
+          <select id="netDir" class="textField">
+            <option value="both">Que saem e que entram</option>
+            <option value="out">Só os que saem</option>
+            <option value="in">Só os que entram</option>
+          </select>
+        </div>
+        <div class="controlRow">
+          <label>Máx. nós por nível: <b id="valNetCap">3.000</b></label>
+          <input id="sliderNetCap" type="range" min="100" max="10000" value="3000" step="100">
+        </div>
+        <div class="controlRow">
+          <label>Opacidade arestas: <b id="valNetEdge">0.16</b></label>
+          <input id="sliderNetEdge" type="range" min="0.02" max="0.60" value="0.16" step="0.02">
+        </div>
+        <div class="controlRow">
+          <label>Espaçamento da rede: <b id="valNetSpread">1.0x</b></label>
+          <input id="sliderNetSpread" type="range" min="0.5" max="2.5" value="1.0" step="0.1">
+        </div>
+        <label class="checkLine" title="Desenha também links existentes entre nós já visíveis na rede">
+          <input id="chkNetCross" type="checkbox"> Links cruzados na rede
+        </label>
+        <div id="netSummary" class="hint"></div>
+        <div id="netSourcesList"></div>
+        <div class="rowButtons">
+          <button id="netFit">Enquadrar rede</button>
+          <button id="netRelax" title="Reacomodar física da rede">↻ Reorganizar</button>
+          <button id="netClear">Limpar rede</button>
+        </div>
+      </section>
+
       <!-- Menor caminho entre dois artigos -->
       <section id="pathPanel" class="card hidden">
         <div class="cardHeader">
@@ -125,6 +167,8 @@
         </div>
         <a id="wikiLink" href="#" target="_blank" rel="noopener">Abrir artigo na Wikipédia ↗</a>
         <div class="rowButtons">
+          <button id="startNet">🕸️ Modo Rede</button>
+          <button id="expandFromInfo" class="hidden">+1 nível daqui</button>
           <button id="setFrom">Usar como origem</button>
           <button id="setTo">Usar como destino</button>
         </div>
